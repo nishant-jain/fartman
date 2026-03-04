@@ -473,7 +473,7 @@ window.addEventListener("keyup", e => { keys[e.code] = false; });
 let isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
 // Virtual button regions (in canvas coordinates)
-const BTN_SIZE = 70;
+const BTN_SIZE = 100;
 const BTN_PAD = 20;
 const BTN_Y = H - BTN_SIZE - BTN_PAD;
 const touchBtns = {
@@ -578,9 +578,9 @@ function drawTouchControls() {
 
         // Label
         ctx.fillStyle = b.active ? "rgba(255, 255, 255, 0.9)" : "rgba(255, 255, 255, 0.6)";
-        ctx.font = id === "fart" ? "bold 20px monospace" : "bold 28px monospace";
+        ctx.font = id === "fart" ? "bold 28px monospace" : "bold 40px monospace";
         ctx.textAlign = "center";
-        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (id === "fart" ? 7 : 10));
+        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (id === "fart" ? 10 : 14));
     }
 }
 
