@@ -372,7 +372,7 @@ window.addEventListener("keydown", e => {
 window.addEventListener("keyup", e => { keys[e.code] = false; });
 
 // ---- Mobile Touch Controls ----
-const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+let isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
 // Virtual button regions (in canvas coordinates)
 const BTN_SIZE = 70;
