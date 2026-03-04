@@ -28,66 +28,125 @@ function initAudio() {
     startBackgroundChatter();
 }
 
+let bgChatterNodes = []; // track all bg audio nodes for cleanup
+
 function startBackgroundChatter() {
-    // Office chatter: filtered noise to simulate murmuring
+    bgChatterNodes = [];
+    bgNoiseGain = audioCtx.createGain();
+    bgNoiseGain.gain.value = 0.12;
+    bgNoiseGain.connect(audioCtx.destination);
+
+    // --- Layer 1: Voice-like murmur (multiple formant bands) ---
     const bufferSize = audioCtx.sampleRate * 4;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
-    // Generate brownian noise for murmuring
     let last = 0;
     for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
-        data[i] = (last + 0.02 * white) / 1.02;
+        data[i] = (last + 0.04 * white) / 1.04;
         last = data[i];
-        data[i] *= 3.5;
+        data[i] *= 3.0;
     }
 
-    bgNoiseNode = audioCtx.createBufferSource();
-    bgNoiseNode.buffer = buffer;
-    bgNoiseNode.loop = true;
+    // Voice formant frequencies to simulate distant chatter
+    const formants = [
+        { freq: 300, Q: 2.0, gain: 0.35 },  // low murmur
+        { freq: 600, Q: 2.5, gain: 0.25 },  // mid voice
+        { freq: 1200, Q: 3.0, gain: 0.12 }, // higher voice
+        { freq: 2500, Q: 2.0, gain: 0.06 }, // sibilance
+    ];
 
-    // Bandpass filter to sound like voices
-    const bandpass = audioCtx.createBiquadFilter();
-    bandpass.type = "bandpass";
-    bandpass.frequency.value = 400;
-    bandpass.Q.value = 0.8;
+    for (const f of formants) {
+        const src = audioCtx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
 
-    // Second filter for more voice-like quality
-    const bandpass2 = audioCtx.createBiquadFilter();
-    bandpass2.type = "bandpass";
-    bandpass2.frequency.value = 800;
-    bandpass2.Q.value = 0.5;
+        const bp = audioCtx.createBiquadFilter();
+        bp.type = "bandpass";
+        bp.frequency.value = f.freq;
+        bp.Q.value = f.Q;
 
-    // LFO to modulate volume (simulates conversation rhythm)
-    const lfo = audioCtx.createOscillator();
-    const lfoGain = audioCtx.createGain();
-    lfo.frequency.value = 0.3;
-    lfoGain.gain.value = 0.03;
-    lfo.connect(lfoGain);
+        // Slow volume modulation for conversation rhythm
+        const modGain = audioCtx.createGain();
+        modGain.gain.value = f.gain;
 
-    bgNoiseGain = audioCtx.createGain();
-    bgNoiseGain.gain.value = 0.06;
+        const lfo = audioCtx.createOscillator();
+        const lfoAmp = audioCtx.createGain();
+        lfo.frequency.value = 0.15 + Math.random() * 0.4;
+        lfoAmp.gain.value = f.gain * 0.5;
+        lfo.connect(lfoAmp);
+        lfoAmp.connect(modGain.gain);
 
-    bgNoiseNode.connect(bandpass);
-    bandpass.connect(bandpass2);
-    bandpass2.connect(bgNoiseGain);
-    lfoGain.connect(bgNoiseGain.gain);
-    bgNoiseGain.connect(audioCtx.destination);
+        src.connect(bp);
+        bp.connect(modGain);
+        modGain.connect(bgNoiseGain);
 
-    lfo.start();
-    bgNoiseNode.start();
+        lfo.start();
+        src.start();
+        bgChatterNodes.push(src, lfo);
+    }
+
+    // --- Layer 2: Intermittent keyboard clicks (filtered impulses) ---
+    const clickBufSize = audioCtx.sampleRate * 6;
+    const clickBuf = audioCtx.createBuffer(1, clickBufSize, audioCtx.sampleRate);
+    const clickData = clickBuf.getChannelData(0);
+    for (let i = 0; i < clickBufSize; i++) {
+        // Sparse random clicks
+        if (Math.random() < 0.003) {
+            const vol = 0.2 + Math.random() * 0.4;
+            clickData[i] = vol * (Math.random() > 0.5 ? 1 : -1);
+            // Short decay
+            for (let j = 1; j < 80 && i + j < clickBufSize; j++) {
+                clickData[i + j] = clickData[i] * Math.exp(-j * 0.08) * (Math.random() * 0.5 + 0.5);
+            }
+        }
+    }
+    const clickSrc = audioCtx.createBufferSource();
+    clickSrc.buffer = clickBuf;
+    clickSrc.loop = true;
+    const clickHp = audioCtx.createBiquadFilter();
+    clickHp.type = "highpass";
+    clickHp.frequency.value = 2000;
+    const clickGain = audioCtx.createGain();
+    clickGain.gain.value = 0.08;
+    clickSrc.connect(clickHp);
+    clickHp.connect(clickGain);
+    clickGain.connect(bgNoiseGain);
+    clickSrc.start();
+    bgChatterNodes.push(clickSrc);
+
+    // --- Layer 3: Subtle HVAC hum ---
+    const hvac = audioCtx.createOscillator();
+    hvac.type = "sawtooth";
+    hvac.frequency.value = 60;
+    const hvacFilter = audioCtx.createBiquadFilter();
+    hvacFilter.type = "lowpass";
+    hvacFilter.frequency.value = 120;
+    hvacFilter.Q.value = 1;
+    const hvacGain = audioCtx.createGain();
+    hvacGain.gain.value = 0.015;
+    hvac.connect(hvacFilter);
+    hvacFilter.connect(hvacGain);
+    hvacGain.connect(bgNoiseGain);
+    hvac.start();
+    bgChatterNodes.push(hvac);
+
+    bgNoiseNode = bgChatterNodes[0]; // keep reference for stopBackgroundChatter
 }
 
 function stopBackgroundChatter() {
-    if (bgNoiseNode) {
-        try { bgNoiseNode.stop(); } catch (e) {}
-        bgNoiseNode = null;
+    for (const node of bgChatterNodes) {
+        try { node.stop(); } catch (e) {}
     }
+    bgChatterNodes = [];
+    bgNoiseNode = null;
 }
 
-// Continuous quiet hiss for holding space
+// Continuous quiet hiss + whistle for holding space
 let leakSoundNode = null;
 let leakSoundGain = null;
+let whistleOsc = null;
+let whistleLfo = null;
 
 function startLeakSound() {
     if (!audioCtx || leakSoundNode) return;
@@ -111,6 +170,35 @@ function startLeakSound() {
     filter.connect(leakSoundGain);
     leakSoundGain.connect(audioCtx.destination);
     leakSoundNode.start();
+
+    // Whistling fart tone - thin airy sine that wobbles in pitch
+    whistleOsc = audioCtx.createOscillator();
+    whistleOsc.type = "sine";
+    whistleOsc.frequency.value = 1800;
+
+    // LFO to wobble the pitch for a squeaky whistle effect
+    whistleLfo = audioCtx.createOscillator();
+    whistleLfo.frequency.value = 6;
+    const lfoGain = audioCtx.createGain();
+    lfoGain.gain.value = 400;
+    whistleLfo.connect(lfoGain);
+    lfoGain.connect(whistleOsc.frequency);
+
+    // Bandpass to keep it thin and airy
+    const whistleFilter = audioCtx.createBiquadFilter();
+    whistleFilter.type = "bandpass";
+    whistleFilter.frequency.value = 1800;
+    whistleFilter.Q.value = 5;
+
+    const whistleGain = audioCtx.createGain();
+    whistleGain.gain.value = 0.04;
+
+    whistleOsc.connect(whistleFilter);
+    whistleFilter.connect(whistleGain);
+    whistleGain.connect(audioCtx.destination);
+
+    whistleLfo.start();
+    whistleOsc.start();
 }
 
 function stopLeakSound() {
@@ -118,6 +206,12 @@ function stopLeakSound() {
         try { leakSoundNode.stop(); } catch (e) {}
         leakSoundNode = null;
         leakSoundGain = null;
+    }
+    if (whistleOsc) {
+        try { whistleOsc.stop(); } catch (e) {}
+        try { whistleLfo.stop(); } catch (e) {}
+        whistleOsc = null;
+        whistleLfo = null;
     }
 }
 
@@ -354,12 +448,16 @@ function playWinSound() {
 }
 
 // ---- Game State ----
-let state = "start"; // start | playing | gameover | win
+let state = "start"; // start | playing | caught | gameover | win
 let camera = { x: 0 };
 let fartman, platforms, noiseSources, coworkers, particles, levelEnd;
 let keys = {};
 let fartCooldown = 0;
 let blastTimer = 0; // visual timer for the big 100% blast
+let shameTimer = 0; // timer for the caught shame animation
+let caughtByCoworker = null; // which coworker caught fartman
+let flickerLightIndex = 0; // which ceiling light flickers
+let fallenLight = null; // { x, y, vy, fallen, flickerTimer }
 
 // ---- Input ----
 window.addEventListener("keydown", e => {
@@ -421,6 +519,7 @@ function updateTouchButtons(touches) {
 
 canvas.addEventListener("touchstart", e => {
     e.preventDefault();
+    if (state === "caught") return; // no input during shame animation
     if (state !== "playing") {
         initAudio();
         // Try fullscreen + landscape lock on mobile
@@ -538,30 +637,101 @@ function spawnFartCloud(x, y, big) {
 const GROUND_Y = 460;
 const CHAR_GROUND = GROUND_Y - 60 * S / 2; // character center-ish
 
+function randRange(min, max) {
+    return min + Math.random() * (max - min);
+}
+
 function buildLevel() {
     platforms = [
-        { x: 0, y: GROUND_Y, w: 3200, h: 80, color: "#5d5d5d" },
+        { x: 0, y: GROUND_Y, w: 5000, h: 80, color: "#5d5d5d" },
     ];
 
-    noiseSources = [
-        { x: 300, y: GROUND_Y, type: "printer", label: "LOUD PRINTER", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
-        { x: 800, y: GROUND_Y, type: "sneezer", label: "SICK COWORKER", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
-        { x: 1300, y: GROUND_Y, type: "drill", label: "MAINTENANCE", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
-        { x: 1800, y: GROUND_Y, type: "printer", label: "PRINTER", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
-        { x: 2300, y: GROUND_Y, type: "sneezer", label: "SICK COWORKER", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
-        { x: 2750, y: GROUND_Y, type: "drill", label: "MAINTENANCE", radius: NOISE_RADIUS, animFrame: 0, disabled: 0 },
+    // Randomize distraction positions across the level
+    // Place 6 distractions with varied spacing between x=200 and x=2900
+    const distractionTypes = [
+        { type: "printer", label: "LOUD PRINTER" },
+        { type: "sneezer", label: "SICK COWORKER" },
+        { type: "drill", label: "MAINTENANCE" },
+        { type: "printer", label: "PRINTER" },
+        { type: "sneezer", label: "SICK COWORKER" },
+        { type: "drill", label: "MAINTENANCE" },
     ];
+    // Shuffle distraction types
+    for (let i = distractionTypes.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [distractionTypes[i], distractionTypes[j]] = [distractionTypes[j], distractionTypes[i]];
+    }
+    // Generate randomized positions with minimum gap
+    const nsPositions = [];
+    const MIN_GAP = 500;
+    let cursor = randRange(300, 500);
+    for (let i = 0; i < 6; i++) {
+        nsPositions.push(Math.floor(cursor));
+        cursor += randRange(MIN_GAP, 900);
+        if (cursor > 4600) cursor = 4600;
+    }
+    noiseSources = nsPositions.map((x, i) => ({
+        x, y: GROUND_Y,
+        type: distractionTypes[i].type,
+        label: distractionTypes[i].label,
+        radius: NOISE_RADIUS, animFrame: 0, disabled: 0,
+    }));
 
-    coworkers = [
-        { x: 550, y: GROUND_Y, dir: -1, patrolMin: 480, patrolMax: 680, speed: 1.2, alert: 0 },
-        { x: 1000, y: GROUND_Y, dir: 1, patrolMin: 950, patrolMax: 1150, speed: 1, alert: 0 },
-        { x: 1550, y: GROUND_Y, dir: -1, patrolMin: 1420, patrolMax: 1650, speed: 1.5, alert: 0 },
-        { x: 2000, y: GROUND_Y, dir: 1, patrolMin: 1950, patrolMax: 2200, speed: 0.8, alert: 0 },
-        { x: 2500, y: GROUND_Y, dir: -1, patrolMin: 2400, patrolMax: 2650, speed: 1.3, alert: 0 },
-        { x: 2950, y: GROUND_Y, dir: 1, patrolMin: 2850, patrolMax: 3050, speed: 1, alert: 0 },
-    ];
+    // Randomize coworker positions — ensure no overlap with distractions
+    const cwPositions = [];
+    let cwCursor = randRange(400, 600);
+    for (let i = 0; i < 6; i++) {
+        let pos = Math.floor(cwCursor);
+        // Nudge away from any distraction that's too close
+        for (const nsX of nsPositions) {
+            if (Math.abs(pos - nsX) < 120) {
+                pos = nsX + (pos >= nsX ? 140 : -140);
+            }
+        }
+        cwPositions.push(pos);
+        cwCursor += randRange(550, 850);
+        if (cwCursor > 4800) cwCursor = 4800;
+    }
+    const speeds = [0.8, 1, 1, 1.2, 1.3, 1.5];
+    // Shuffle speeds
+    for (let i = speeds.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [speeds[i], speeds[j]] = [speeds[j], speeds[i]];
+    }
+    // Randomly assign 2-3 coworkers as sitting (static at desks)
+    const sittingIndices = new Set();
+    const numSitting = 2 + Math.floor(Math.random() * 2); // 2 or 3
+    while (sittingIndices.size < numSitting) {
+        sittingIndices.add(Math.floor(Math.random() * 6));
+    }
+    coworkers = cwPositions.map((x, i) => {
+        const sitting = sittingIndices.has(i);
+        const patrolRange = randRange(80, 150);
+        return {
+            x, y: GROUND_Y,
+            dir: Math.random() < 0.5 ? -1 : 1,
+            patrolMin: sitting ? x : Math.max(50, Math.floor(x - patrolRange)),
+            patrolMax: sitting ? x : Math.min(4950, Math.floor(x + patrolRange)),
+            speed: sitting ? 0 : speeds[i],
+            alert: 0,
+            sitting,
+        };
+    });
 
-    levelEnd = { x: 3100, y: GROUND_Y - 120, w: 90, h: 120 };
+    // Place level end shortly after the last content
+    const lastContentX = Math.max(
+        nsPositions[nsPositions.length - 1],
+        cwPositions[cwPositions.length - 1]
+    );
+    const levelWidth = Math.floor(lastContentX + 400);
+    levelEnd = { x: levelWidth - 100, y: GROUND_Y - 120, w: 90, h: 120 };
+    platforms[0].w = levelWidth;
+
+    // Pick a random light index to flicker (skip first 4 lights)
+    const totalLights = Math.floor((levelWidth - 100) / 300) + 1;
+    flickerLightIndex = 4 + Math.floor(Math.random() * Math.max(1, totalLights - 6));
+    const flickerWorldX = flickerLightIndex * 300 + 100;
+    fallenLight = { x: flickerWorldX, y: 33, vy: 0, fallen: false, triggered: false, flickerTimer: 90 + Math.floor(Math.random() * 60) };
 
     particles = [];
 }
@@ -577,8 +747,11 @@ function startGame() {
         farting: false,
         fartTimer: 0,
         walkFrame: 0,
+        shameProgress: 0,
     };
     fartCooldown = 0;
+    shameTimer = 0;
+    caughtByCoworker = null;
     camera.x = 0;
     buildLevel();
 }
@@ -586,25 +759,25 @@ function startGame() {
 // ---- Fart Mechanic ----
 // Check if fart sound is masked by a distraction, return true if heard by coworker
 function checkFartHeard(radius) {
-    let masked = false;
+    // If fartman is inside any active noise source, his fart is masked
     for (const ns of noiseSources) {
         if (ns.disabled > 0) continue;
-        if (Math.abs(fartman.x - ns.x) < ns.radius) { masked = true; break; }
+        if (Math.abs(fartman.x - ns.x) < ns.radius) return false;
     }
-    if (!masked) {
-        for (const cw of coworkers) {
-            if (Math.abs(fartman.x - cw.x) < radius) {
-                cw.alert = 60;
-                setTimeout(() => {
-                    if (state === "playing") {
-                        state = "gameover";
-                        stopAllDistractionSounds();
-                        stopLeakSound();
-                        playGameOverSound();
-                    }
-                }, 500);
-                return true;
+    // Not masked — check if any coworker is close enough to hear
+    for (const cw of coworkers) {
+        if (Math.abs(fartman.x - cw.x) < radius) {
+            cw.alert = 60;
+            caughtByCoworker = cw;
+            state = "caught";
+            shameTimer = 150; // ~2.5 seconds at 60fps
+            stopLeakSound();
+            stopAllDistractionSounds();
+            for (const c of coworkers) {
+                c.laughing = true;
+                c.dir = c.x < fartman.x ? 1 : -1;
             }
+            return true;
         }
     }
     return false;
@@ -669,8 +842,8 @@ function update() {
         // Start leak hiss sound
         startLeakSound();
 
-        // Small fart radius for detection while leaking
-        checkFartHeard(FART_RADIUS * 0.5);
+        // Fart radius for detection while leaking
+        checkFartHeard(FART_RADIUS * 1);
     } else {
         stopLeakSound();
         leakParticleTimer = 0;
@@ -694,7 +867,7 @@ function update() {
     }
 
     fartman.x += fartman.vx;
-    fartman.x = Math.max(0, Math.min(fartman.x, 3200 - fartman.w));
+    fartman.x = Math.max(0, Math.min(fartman.x, platforms[0].w - fartman.w));
     fartman.y = GROUND_Y; // always on ground
 
     // Walk animation
@@ -709,9 +882,11 @@ function update() {
 
     // Coworker patrol
     for (const cw of coworkers) {
-        cw.x += cw.speed * cw.dir;
-        if (cw.x <= cw.patrolMin) cw.dir = 1;
-        if (cw.x >= cw.patrolMax) cw.dir = -1;
+        if (!cw.sitting) {
+            cw.x += cw.speed * cw.dir;
+            if (cw.x <= cw.patrolMin) cw.dir = 1;
+            if (cw.x >= cw.patrolMax) cw.dir = -1;
+        }
         if (cw.alert > 0) cw.alert--;
     }
 
@@ -721,6 +896,51 @@ function update() {
             ns.disabled--;
         } else {
             ns.animFrame++;
+        }
+    }
+
+    // Falling light update
+    if (fallenLight) {
+        if (!fallenLight.fallen) {
+            // Only start flickering countdown when the light is visible on screen
+            const lightScreenX = fallenLight.x - camera.x;
+            if (!fallenLight.triggered && lightScreenX >= 0 && lightScreenX <= W) {
+                fallenLight.triggered = true;
+            }
+            if (fallenLight.triggered && fallenLight.flickerTimer > 0) {
+                fallenLight.flickerTimer--;
+            } else if (fallenLight.triggered && fallenLight.flickerTimer <= 0) {
+                // Falling
+                fallenLight.vy += 0.5; // gravity
+                fallenLight.y += fallenLight.vy;
+                if (fallenLight.y >= GROUND_Y - 5) {
+                    fallenLight.y = GROUND_Y - 5;
+                    fallenLight.fallen = true;
+                    // Spawn spark particles
+                    for (let i = 0; i < 12; i++) {
+                        particles.push({
+                            x: fallenLight.x, y: GROUND_Y - 5,
+                            vx: (Math.random() - 0.5) * 6,
+                            vy: -Math.random() * 5 - 1,
+                            life: 20 + Math.floor(Math.random() * 20),
+                        });
+                    }
+                    // Disable the nearest noise source
+                    let closestNs = null;
+                    let closestDist = Infinity;
+                    for (const ns of noiseSources) {
+                        const d = Math.abs(ns.x - fallenLight.x);
+                        if (d < closestDist) {
+                            closestDist = d;
+                            closestNs = ns;
+                        }
+                    }
+                    if (closestNs) {
+                        closestNs.disabled = 999999; // permanently disabled
+                        closestNs.crushedByLight = true;
+                    }
+                }
+            }
         }
     }
 
@@ -742,7 +962,7 @@ function update() {
     // Camera follow
     const targetCam = fartman.x - W / 3;
     camera.x += (targetCam - camera.x) * 0.08;
-    camera.x = Math.max(0, Math.min(camera.x, 3200 - W));
+    camera.x = Math.max(0, Math.min(camera.x, platforms[0].w - W));
 
     // Win condition
     if (fartman.x + fartman.w > levelEnd.x && fartman.x < levelEnd.x + levelEnd.w) {
@@ -750,6 +970,325 @@ function update() {
         stopAllDistractionSounds();
         stopLeakSound();
         playWinSound();
+    }
+}
+
+// ---- Caught / Shame Animation ----
+function updateCaught() {
+    if (state !== "caught") return;
+    shameTimer--;
+
+    // Fartman progressively bends over in shame
+    fartman.shameProgress = Math.min(1, (150 - shameTimer) / 40); // 0 to 1 over ~40 frames
+
+    // Coworkers bob while laughing
+    for (const cw of coworkers) {
+        cw.laughFrame = (cw.laughFrame || 0) + 1;
+    }
+
+    // Particles still move
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    if (shameTimer <= 0) {
+        state = "gameover";
+        playGameOverSound();
+        // Reset laughing state
+        for (const cw of coworkers) {
+            cw.laughing = false;
+            cw.laughFrame = 0;
+        }
+    }
+}
+
+function drawFartmanShame() {
+    const sx = fartman.x - camera.x;
+    const baseY = fartman.y;
+    const f = fartman.facing;
+    const sp = fartman.shameProgress || 0;
+
+    // Bend angle: 0 to ~35 degrees forward
+    const bendAngle = sp * 35 * Math.PI / 180;
+
+    ctx.save();
+    // Pivot at feet
+    ctx.translate(sx + 22 * S, baseY);
+    ctx.rotate(f * bendAngle);
+    ctx.translate(-(sx + 22 * S), -baseY);
+
+    // Shadow
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(sx + 22 * S, baseY - 2, 25 * S, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Legs (still, no walking)
+    ctx.fillStyle = "#2c3e50";
+    ctx.fillRect(sx + 10 * S, baseY - 18 * S, 10 * S, 18 * S);
+    ctx.fillRect(sx + 24 * S, baseY - 18 * S, 10 * S, 18 * S);
+    // Shoes
+    ctx.fillStyle = "#1a1a1a";
+    ctx.beginPath();
+    ctx.ellipse(sx + 15 * S, baseY - 2, 8 * S, 4 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(sx + 29 * S, baseY - 2, 8 * S, 4 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Torso - turns red with shame
+    const torsoX = sx + 22 * S;
+    const torsoY = baseY - 38 * S;
+    const torsoRX = 20 * S;
+    const torsoRY = 22 * S;
+
+    const r = Math.floor(52 + sp * 180);
+    const g = Math.floor(152 - sp * 100);
+    const b = Math.floor(219 - sp * 150);
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    ctx.beginPath();
+    ctx.ellipse(torsoX, torsoY, torsoRX, torsoRY, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Arms covering face (move up as shame progresses)
+    const armColor = `rgb(${Math.floor(41 + sp * 100)}, ${Math.floor(128 - sp * 60)}, ${Math.floor(185 - sp * 120)})`;
+    ctx.fillStyle = armColor;
+    const armRaise = sp * 22 * S;
+    // Left arm - covers face
+    ctx.save();
+    ctx.translate(torsoX - torsoRX + 3 * S, torsoY - 6 * S - armRaise);
+    ctx.rotate(-30 * sp * Math.PI / 180);
+    ctx.beginPath();
+    ctx.ellipse(0, 12 * S, 5 * S, 12 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Right arm - covers face
+    ctx.save();
+    ctx.translate(torsoX + torsoRX - 3 * S, torsoY - 6 * S - armRaise);
+    ctx.rotate(30 * sp * Math.PI / 180);
+    ctx.beginPath();
+    ctx.ellipse(0, 12 * S, 5 * S, 12 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Hands in front of face when fully shamed
+    if (sp > 0.5) {
+        const handAlpha = (sp - 0.5) * 2;
+        ctx.fillStyle = `rgba(244, 194, 138, ${handAlpha})`;
+        const headX = torsoX;
+        const headY = torsoY - 26 * S;
+        ctx.beginPath();
+        ctx.ellipse(headX - 8 * S, headY + 2 * S, 7 * S, 6 * S, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(headX + 8 * S, headY + 2 * S, 7 * S, 6 * S, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Head - increasingly red
+    const headX = torsoX;
+    const headY = torsoY - 26 * S;
+    const headR = 16 * S;
+    const faceR = Math.floor(244 + sp * 11);
+    const faceG = Math.floor(194 - sp * 120);
+    const faceB = Math.floor(138 - sp * 80);
+    ctx.fillStyle = `rgb(${Math.min(255, faceR)}, ${Math.max(50, faceG)}, ${Math.max(50, faceB)})`;
+    ctx.beginPath();
+    ctx.arc(headX, headY, headR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hair
+    ctx.fillStyle = "#4a3520";
+    ctx.beginPath();
+    ctx.arc(headX, headY - 3 * S, headR, Math.PI, 0);
+    ctx.fill();
+
+    // Collar (at neck)
+    const shameNeckY = headY + headR - 2 * S;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(torsoX, shameNeckY);
+    ctx.lineTo(torsoX - 12 * S, shameNeckY - 4 * S);
+    ctx.lineTo(torsoX - 8 * S, shameNeckY + 6 * S);
+    ctx.lineTo(torsoX - 2 * S, shameNeckY + 3 * S);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(torsoX, shameNeckY);
+    ctx.lineTo(torsoX + 12 * S, shameNeckY - 4 * S);
+    ctx.lineTo(torsoX + 8 * S, shameNeckY + 6 * S);
+    ctx.lineTo(torsoX + 2 * S, shameNeckY + 3 * S);
+    ctx.fill();
+
+    // Tie
+    ctx.fillStyle = "#e74c3c";
+    ctx.beginPath();
+    ctx.moveTo(torsoX, shameNeckY);
+    ctx.lineTo(torsoX + 4 * S, shameNeckY + 14 * S);
+    ctx.lineTo(torsoX, shameNeckY + 22 * S);
+    ctx.lineTo(torsoX - 4 * S, shameNeckY + 14 * S);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(torsoX, shameNeckY + 2 * S, 3 * S, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes - squinting shut in shame (visible before hands cover)
+    if (sp < 0.8) {
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 2.5;
+        // Squinting lines
+        ctx.beginPath();
+        ctx.moveTo(headX - 9 * S, headY - 1 * S);
+        ctx.lineTo(headX - 1 * S, headY - 1 * S);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(headX + 1 * S, headY - 1 * S);
+        ctx.lineTo(headX + 9 * S, headY - 1 * S);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+
+        // Grimacing mouth
+        ctx.strokeStyle = "#c0392b";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(headX, headY + 12 * S, 5 * S, Math.PI, 0);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+    }
+
+    // Sweat drops (shame sweat)
+    const sweatBob = Math.sin(Date.now() * 0.015) * 3;
+    ctx.fillStyle = "#5dade2";
+    ctx.beginPath();
+    ctx.arc(headX + headR + 2 * S, headY - 4 * S + sweatBob, 3 * S, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(headX - headR - 1 * S, headY + sweatBob * 0.7, 2.5 * S, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(headX + headR - 3 * S, headY + 8 * S - sweatBob, 2 * S, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    // Shame text floating above
+    if (sp > 0.3) {
+        const textAlpha = Math.min(1, (sp - 0.3) * 2);
+        ctx.fillStyle = `rgba(255, 50, 50, ${textAlpha})`;
+        ctx.font = "bold 16px monospace";
+        ctx.textAlign = "center";
+        const floatY = Math.sin(Date.now() * 0.005) * 4;
+        ctx.fillText("*dying inside*", sx + 22 * S, baseY - 95 * S + floatY);
+    }
+}
+
+function drawCoworkerLaughing(cw) {
+    const sx = cw.x - camera.x;
+    const baseY = cw.y;
+
+    if (sx < -80 || sx > W + 80) return;
+
+    const laughBob = Math.abs(Math.sin((cw.laughFrame || 0) * 0.2)) * 5;
+
+    // Legs - bouncing with laughter
+    ctx.fillStyle = "#2c3e50";
+    ctx.fillRect(sx - 8 * S, baseY - 15 * S + laughBob, 7 * S, 15 * S);
+    ctx.fillRect(sx + 2 * S, baseY - 15 * S - laughBob, 7 * S, 15 * S);
+
+    // Body bouncing
+    ctx.fillStyle = "#95a5a6";
+    ctx.beginPath();
+    ctx.ellipse(sx, baseY - 28 * S - laughBob, 14 * S, 16 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pointing arm toward fartman
+    ctx.fillStyle = "#7f8c8d";
+    const pointDir = cw.dir;
+    ctx.save();
+    ctx.translate(sx + pointDir * 12 * S, baseY - 35 * S - laughBob);
+    ctx.rotate(pointDir * -25 * Math.PI / 180);
+    ctx.beginPath();
+    ctx.ellipse(pointDir * 10 * S, 0, 12 * S, 4 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Pointing finger
+    ctx.fillStyle = "#f4c28a";
+    ctx.beginPath();
+    ctx.ellipse(pointDir * 22 * S, 0, 4 * S, 3 * S, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Head bouncing
+    ctx.fillStyle = "#f4c28a";
+    ctx.beginPath();
+    ctx.arc(sx, baseY - 48 * S - laughBob, 13 * S, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hair
+    ctx.fillStyle = "#333";
+    ctx.beginPath();
+    ctx.arc(sx, baseY - 52 * S - laughBob, 13 * S, Math.PI, 0);
+    ctx.fill();
+
+    // Collar (at neck)
+    const lNeckY = baseY - 48 * S - laughBob + 13 * S - 2 * S;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(sx, lNeckY);
+    ctx.lineTo(sx - 10 * S, lNeckY - 3 * S);
+    ctx.lineTo(sx - 7 * S, lNeckY + 5 * S);
+    ctx.lineTo(sx - 2 * S, lNeckY + 2 * S);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(sx, lNeckY);
+    ctx.lineTo(sx + 10 * S, lNeckY - 3 * S);
+    ctx.lineTo(sx + 7 * S, lNeckY + 5 * S);
+    ctx.lineTo(sx + 2 * S, lNeckY + 2 * S);
+    ctx.fill();
+
+    // Tie
+    ctx.fillStyle = "#c0392b";
+    ctx.beginPath();
+    ctx.moveTo(sx, lNeckY);
+    ctx.lineTo(sx + 3 * S, lNeckY + 12 * S);
+    ctx.lineTo(sx, lNeckY + 20 * S);
+    ctx.lineTo(sx - 3 * S, lNeckY + 12 * S);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(sx, lNeckY + 1.5 * S, 2.5 * S, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes - happy squinting from laughing
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(sx - 4 * S, baseY - 49 * S - laughBob, 3 * S, Math.PI * 0.2, Math.PI * 0.8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(sx + 4 * S, baseY - 49 * S - laughBob, 3 * S, Math.PI * 0.2, Math.PI * 0.8);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+
+    // Big open laughing mouth
+    ctx.fillStyle = "#c0392b";
+    ctx.beginPath();
+    ctx.arc(sx, baseY - 43 * S - laughBob, 5 * S, 0, Math.PI);
+    ctx.fill();
+    // Teeth
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(sx - 4 * S, baseY - 43 * S - laughBob, 8 * S, 3 * S);
+
+    // "HA HA" text floating up
+    const haFrame = (cw.laughFrame || 0);
+    if (haFrame % 40 < 25) {
+        const haAlpha = 1 - (haFrame % 40) / 25;
+        const haY = -(haFrame % 40) * 1.2;
+        ctx.fillStyle = `rgba(255, 100, 100, ${haAlpha})`;
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("HA HA!", sx, baseY - 65 * S - laughBob + haY);
     }
 }
 
@@ -778,15 +1317,88 @@ function drawBackground() {
 
     // Ceiling lights
     for (let x = -camera.x % 300 + 100; x < W; x += 300) {
-        ctx.fillStyle = "#fff8e0";
-        ctx.fillRect(x - 30, 25, 60, 8);
-        ctx.fillStyle = "rgba(255, 248, 200, 0.15)";
-        ctx.beginPath();
-        ctx.moveTo(x - 30, 33);
-        ctx.lineTo(x + 30, 33);
-        ctx.lineTo(x + 80, 200);
-        ctx.lineTo(x - 80, 200);
-        ctx.fill();
+        const worldLightIdx = Math.round((x + camera.x - 100) / 300);
+        const isFlicker = worldLightIdx === flickerLightIndex;
+        const lightFalling = isFlicker && fallenLight && fallenLight.triggered && fallenLight.flickerTimer <= 0;
+
+        if (lightFalling) {
+            // Light has detached — draw empty fixture mount
+            ctx.fillStyle = "#555";
+            ctx.fillRect(x - 30, 25, 60, 8);
+            // Dangling wires
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x - 10, 33);
+            ctx.lineTo(x - 14, 50);
+            ctx.moveTo(x + 10, 33);
+            ctx.lineTo(x + 14, 50);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+        } else if (isFlicker && fallenLight && fallenLight.triggered && fallenLight.flickerTimer > 0) {
+            // Triggered and flickering before falling
+            const flickerOn = Math.random() > 0.3;
+            if (flickerOn) {
+                const bright = 0.5 + Math.random() * 0.5;
+                ctx.globalAlpha = bright;
+                ctx.fillStyle = "#fff8e0";
+                ctx.fillRect(x - 30, 25, 60, 8);
+                ctx.fillStyle = "rgba(255, 248, 200, 0.15)";
+                ctx.beginPath();
+                ctx.moveTo(x - 30, 33);
+                ctx.lineTo(x + 30, 33);
+                ctx.lineTo(x + 80, 200);
+                ctx.lineTo(x - 80, 200);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            } else {
+                ctx.fillStyle = "#888";
+                ctx.fillRect(x - 30, 25, 60, 8);
+            }
+        } else {
+            // Normal light
+            ctx.fillStyle = "#fff8e0";
+            ctx.fillRect(x - 30, 25, 60, 8);
+            ctx.fillStyle = "rgba(255, 248, 200, 0.15)";
+            ctx.beginPath();
+            ctx.moveTo(x - 30, 33);
+            ctx.lineTo(x + 30, 33);
+            ctx.lineTo(x + 80, 200);
+            ctx.lineTo(x - 80, 200);
+            ctx.fill();
+        }
+    }
+
+    // Draw falling / fallen light
+    if (fallenLight && fallenLight.flickerTimer <= 0) {
+        const sx = fallenLight.x - camera.x;
+        if (sx > -100 && sx < W + 100) {
+            // The light fixture falling or on the ground
+            const angle = fallenLight.fallen ? 0.3 : Math.sin(fallenLight.y * 0.05) * 0.15;
+            ctx.save();
+            ctx.translate(sx, fallenLight.y);
+            ctx.rotate(angle);
+            // Fixture body
+            ctx.fillStyle = fallenLight.fallen ? "#777" : "#fff8e0";
+            ctx.fillRect(-30, -4, 60, 8);
+            // Glass tube
+            ctx.fillStyle = fallenLight.fallen ? "#999" : "#ffe";
+            ctx.fillRect(-25, -2, 50, 4);
+            ctx.restore();
+
+            if (fallenLight.fallen) {
+                // Broken glass shards on the ground
+                ctx.fillStyle = "rgba(200, 200, 200, 0.5)";
+                for (let i = -20; i < 20; i += 7) {
+                    ctx.fillRect(sx + i, GROUND_Y - 3, 4, 3);
+                }
+                // "SMASH!" text fading
+                ctx.fillStyle = "rgba(255, 100, 0, 0.7)";
+                ctx.font = "bold 14px monospace";
+                ctx.textAlign = "center";
+                ctx.fillText("CRASH!", sx, GROUND_Y - 20);
+            }
+        }
     }
 
     // Windows
@@ -826,6 +1438,8 @@ function drawPlatforms() {
         { x: 1050, w: 100 }, { x: 1250, w: 160 }, { x: 1500, w: 140 },
         { x: 1750, w: 120 }, { x: 1950, w: 180 }, { x: 2250, w: 100 },
         { x: 2450, w: 160 }, { x: 2700, w: 140 }, { x: 2900, w: 120 },
+        { x: 3150, w: 150 }, { x: 3400, w: 130 }, { x: 3700, w: 160 },
+        { x: 3950, w: 110 }, { x: 4200, w: 140 }, { x: 4500, w: 120 },
     ];
     for (const d of desks) {
         const sx = d.x - camera.x;
@@ -855,6 +1469,17 @@ function drawNoiseSource(ns) {
 
     // If disabled, draw dimmed with "knocked out" indicator
     if (ns.disabled > 0) {
+        if (ns.crushedByLight) {
+            // Permanently destroyed by fallen light — draw smashed/dimmed
+            ctx.globalAlpha = 0.2;
+            drawNoiseSourceSprite(ns, sx);
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = "#ff6600";
+            ctx.font = "bold 13px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText("DESTROYED!", sx, ns.y - 68 * S);
+            return;
+        }
         ctx.globalAlpha = 0.3;
         drawNoiseSourceSprite(ns, sx);
         ctx.globalAlpha = 1;
@@ -1046,15 +1671,6 @@ function drawFartman() {
         ctx.fill();
     }
 
-    // Tie
-    ctx.fillStyle = "#e74c3c";
-    ctx.beginPath();
-    ctx.moveTo(torsoX, torsoY - 18 * S);
-    ctx.lineTo(torsoX + 4 * S, torsoY - 4 * S);
-    ctx.lineTo(torsoX, torsoY + 4 * S);
-    ctx.lineTo(torsoX - 4 * S, torsoY - 4 * S);
-    ctx.fill();
-
     // Arms
     const armColor = fartman.farting ? "#6aa84f" : "#2980b9";
     ctx.fillStyle = armColor;
@@ -1089,6 +1705,37 @@ function drawFartman() {
     ctx.fillStyle = "#4a3520";
     ctx.beginPath();
     ctx.arc(headX, headY - 3 * S, headR, Math.PI, 0);
+    ctx.fill();
+
+    // Collar (at neck, visible below chin)
+    const neckY = headY + headR - 2 * S;
+    ctx.fillStyle = "#fff";
+    // Left collar flap
+    ctx.beginPath();
+    ctx.moveTo(torsoX, neckY);
+    ctx.lineTo(torsoX - 12 * S, neckY - 4 * S);
+    ctx.lineTo(torsoX - 8 * S, neckY + 6 * S);
+    ctx.lineTo(torsoX - 2 * S, neckY + 3 * S);
+    ctx.fill();
+    // Right collar flap
+    ctx.beginPath();
+    ctx.moveTo(torsoX, neckY);
+    ctx.lineTo(torsoX + 12 * S, neckY - 4 * S);
+    ctx.lineTo(torsoX + 8 * S, neckY + 6 * S);
+    ctx.lineTo(torsoX + 2 * S, neckY + 3 * S);
+    ctx.fill();
+
+    // Tie
+    ctx.fillStyle = "#e74c3c";
+    ctx.beginPath();
+    ctx.moveTo(torsoX, neckY);
+    ctx.lineTo(torsoX + 4 * S, neckY + 14 * S);
+    ctx.lineTo(torsoX, neckY + 22 * S);
+    ctx.lineTo(torsoX - 4 * S, neckY + 14 * S);
+    ctx.fill();
+    // Tie knot
+    ctx.beginPath();
+    ctx.arc(torsoX, neckY + 2 * S, 3 * S, 0, Math.PI * 2);
     ctx.fill();
 
     // Eyes
@@ -1222,36 +1869,158 @@ function drawCoworker(cw) {
     ctx.arc(sx, baseY - 30 * S, FART_RADIUS, 0, Math.PI * 2);
     ctx.fill();
 
-    // Legs
-    const legAnim = Math.sin(Date.now() * 0.005 * cw.speed) * 4;
-    ctx.fillStyle = "#2c3e50";
-    ctx.fillRect(sx - 8 * S, baseY - 15 * S + legAnim, 7 * S, 15 * S);
-    ctx.fillRect(sx + 2 * S, baseY - 15 * S - legAnim, 7 * S, 15 * S);
+    if (cw.sitting) {
+        // --- Sitting coworker at desk with computer ---
+        const deskW = 60;
+        const deskH = 40 * S;
+        const deskY = baseY - deskH;
+        const chairDir = cw.dir;
 
-    // Body - 1.5x
-    ctx.fillStyle = cw.alert > 0 ? "#e74c3c" : "#95a5a6";
-    ctx.beginPath();
-    ctx.ellipse(sx, baseY - 28 * S, 14 * S, 16 * S, 0, 0, Math.PI * 2);
-    ctx.fill();
+        // Desk
+        ctx.fillStyle = "#8B7355";
+        ctx.fillRect(sx + chairDir * 10 - deskW / 2, deskY, deskW, 8 * S);
+        // Desk legs
+        ctx.fillStyle = "#7a6545";
+        ctx.fillRect(sx + chairDir * 10 - deskW / 2 + 3, deskY + 8 * S, 5 * S, deskH - 8 * S);
+        ctx.fillRect(sx + chairDir * 10 + deskW / 2 - 3 - 5 * S, deskY + 8 * S, 5 * S, deskH - 8 * S);
 
-    // Head - 1.5x
-    ctx.fillStyle = "#f4c28a";
-    ctx.beginPath();
-    ctx.arc(sx, baseY - 48 * S, 13 * S, 0, Math.PI * 2);
-    ctx.fill();
+        // Monitor on desk
+        const monX = sx + chairDir * 10;
+        ctx.fillStyle = "#222";
+        ctx.fillRect(monX - 12, deskY - 22, 24, 18); // screen
+        ctx.fillStyle = "#4488ff";
+        ctx.fillRect(monX - 10, deskY - 20, 20, 14); // screen glow
+        ctx.fillStyle = "#333";
+        ctx.fillRect(monX - 3, deskY - 4, 6, 4); // stand
 
-    // Hair
-    ctx.fillStyle = "#333";
-    ctx.beginPath();
-    ctx.arc(sx, baseY - 52 * S, 13 * S, Math.PI, 0);
-    ctx.fill();
+        // Chair (behind coworker)
+        ctx.fillStyle = "#444";
+        ctx.fillRect(sx - 10, baseY - 28 * S, 20, 5 * S); // seat
+        ctx.fillRect(sx - 8, baseY - 40 * S, 4, 15 * S); // backrest post
+        ctx.fillRect(sx - 12, baseY - 42 * S, 16, 10 * S); // backrest
 
-    // Eyes
-    ctx.fillStyle = "#222";
-    ctx.beginPath();
-    ctx.arc(sx - 4 * S + cw.dir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
-    ctx.arc(sx + 4 * S + cw.dir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
-    ctx.fill();
+        // Legs (seated, bent forward)
+        ctx.fillStyle = "#2c3e50";
+        ctx.fillRect(sx - 8 * S, baseY - 15 * S, 7 * S, 15 * S);
+        ctx.fillRect(sx + 2 * S, baseY - 15 * S, 7 * S, 15 * S);
+
+        // Body (slightly leaned forward)
+        ctx.fillStyle = cw.alert > 0 ? "#e74c3c" : "#95a5a6";
+        ctx.beginPath();
+        ctx.ellipse(sx, baseY - 30 * S, 14 * S, 14 * S, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Arms reaching toward desk
+        ctx.fillStyle = "#f4c28a";
+        ctx.fillRect(sx + chairDir * 5, baseY - 28 * S, chairDir * 15, 5 * S);
+
+        // Head
+        ctx.fillStyle = "#f4c28a";
+        ctx.beginPath();
+        ctx.arc(sx, baseY - 48 * S, 13 * S, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hair
+        ctx.fillStyle = "#333";
+        ctx.beginPath();
+        ctx.arc(sx, baseY - 52 * S, 13 * S, Math.PI, 0);
+        ctx.fill();
+
+        // Collar (drawn after head so it's visible at the neck)
+        const sNeckY = baseY - 48 * S + 13 * S - 2 * S;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.moveTo(sx, sNeckY);
+        ctx.lineTo(sx - 10 * S, sNeckY - 3 * S);
+        ctx.lineTo(sx - 7 * S, sNeckY + 5 * S);
+        ctx.lineTo(sx - 2 * S, sNeckY + 2 * S);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(sx, sNeckY);
+        ctx.lineTo(sx + 10 * S, sNeckY - 3 * S);
+        ctx.lineTo(sx + 7 * S, sNeckY + 5 * S);
+        ctx.lineTo(sx + 2 * S, sNeckY + 2 * S);
+        ctx.fill();
+
+        // Tie
+        ctx.fillStyle = "#c0392b";
+        ctx.beginPath();
+        ctx.moveTo(sx, sNeckY);
+        ctx.lineTo(sx + 3 * S, sNeckY + 10 * S);
+        ctx.lineTo(sx, sNeckY + 16 * S);
+        ctx.lineTo(sx - 3 * S, sNeckY + 10 * S);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx, sNeckY + 1.5 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eyes (looking at screen)
+        ctx.fillStyle = "#222";
+        ctx.beginPath();
+        ctx.arc(sx - 4 * S + chairDir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.arc(sx + 4 * S + chairDir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.fill();
+    } else {
+        // --- Walking coworker ---
+        // Legs
+        const legAnim = Math.sin(Date.now() * 0.005 * cw.speed) * 4;
+        ctx.fillStyle = "#2c3e50";
+        ctx.fillRect(sx - 8 * S, baseY - 15 * S + legAnim, 7 * S, 15 * S);
+        ctx.fillRect(sx + 2 * S, baseY - 15 * S - legAnim, 7 * S, 15 * S);
+
+        // Body - 1.5x
+        ctx.fillStyle = cw.alert > 0 ? "#e74c3c" : "#95a5a6";
+        ctx.beginPath();
+        ctx.ellipse(sx, baseY - 28 * S, 14 * S, 16 * S, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head - 1.5x
+        ctx.fillStyle = "#f4c28a";
+        ctx.beginPath();
+        ctx.arc(sx, baseY - 48 * S, 13 * S, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hair
+        ctx.fillStyle = "#333";
+        ctx.beginPath();
+        ctx.arc(sx, baseY - 52 * S, 13 * S, Math.PI, 0);
+        ctx.fill();
+
+        // Collar (drawn after head so it's visible at neck)
+        const wNeckY = baseY - 48 * S + 13 * S - 2 * S;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.moveTo(sx, wNeckY);
+        ctx.lineTo(sx - 10 * S, wNeckY - 3 * S);
+        ctx.lineTo(sx - 7 * S, wNeckY + 5 * S);
+        ctx.lineTo(sx - 2 * S, wNeckY + 2 * S);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(sx, wNeckY);
+        ctx.lineTo(sx + 10 * S, wNeckY - 3 * S);
+        ctx.lineTo(sx + 7 * S, wNeckY + 5 * S);
+        ctx.lineTo(sx + 2 * S, wNeckY + 2 * S);
+        ctx.fill();
+
+        // Tie
+        ctx.fillStyle = "#c0392b";
+        ctx.beginPath();
+        ctx.moveTo(sx, wNeckY);
+        ctx.lineTo(sx + 3 * S, wNeckY + 12 * S);
+        ctx.lineTo(sx, wNeckY + 20 * S);
+        ctx.lineTo(sx - 3 * S, wNeckY + 12 * S);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx, wNeckY + 1.5 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eyes
+        ctx.fillStyle = "#222";
+        ctx.beginPath();
+        ctx.arc(sx - 4 * S + cw.dir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.arc(sx + 4 * S + cw.dir * 3 * S, baseY - 48 * S, 2.5 * S, 0, Math.PI * 2);
+        ctx.fill();
+    }
 
     // Alert indicator
     if (cw.alert > 0) {
@@ -1268,7 +2037,7 @@ function drawCoworker(cw) {
 }
 
 function drawGasBar() {
-    const barW = 280;
+    const barW = W / 2;
     const barH = 28;
     const bx = 20;
     const by = 20;
@@ -1415,7 +2184,7 @@ function drawStartScreen() {
     const lines = isTouchDevice ? [
         "Your gas builds up constantly!",
         "HOLD the FART button to release gas.",
-        "At 100% you'll have a BIG BLAST!",
+        "If you reach 100% you'll have a BIG BLAST!",
         "",
         "♪ Release near noisy distractions! ♪",
         "",
@@ -1424,7 +2193,7 @@ function drawStartScreen() {
     ] : [
         "Your gas builds up constantly!",
         "HOLD SPACE to slowly release gas.",
-        "At 100% you'll have a BIG BLAST!",
+        "If you reach 100% you'll have a BIG BLAST!",
         "",
         "♪ Release near noisy distractions! ♪",
         "",
@@ -1565,6 +2334,20 @@ function gameLoop() {
         ctx.restore();
         drawGasBar();
         drawTouchControls();
+    } else if (state === "caught") {
+        updateCaught();
+        ctx.save();
+        drawBackground();
+        drawPlatforms();
+        for (const ns of noiseSources) drawNoiseSource(ns);
+        drawLevelEnd();
+        for (const cw of coworkers) {
+            if (cw.laughing) drawCoworkerLaughing(cw);
+            else drawCoworker(cw);
+        }
+        drawFartmanShame();
+        drawParticles();
+        ctx.restore();
     } else if (state === "gameover") {
         ctx.save();
         drawBackground();
