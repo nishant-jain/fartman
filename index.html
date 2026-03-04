@@ -12,6 +12,7 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
+            height: 100dvh;
             overflow: hidden;
             touch-action: none;
             -webkit-touch-callout: none;
@@ -21,12 +22,43 @@
         canvas {
             border: 2px solid #444;
             image-rendering: pixelated;
-            max-width: 100vw;
-            max-height: 100vh;
+        }
+        #rotate-hint {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(26, 26, 46, 0.95);
+            z-index: 100;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+            font-family: monospace;
+        }
+        #rotate-hint .icon {
+            font-size: 64px;
+            animation: wiggle 1.5s ease-in-out infinite;
+        }
+        #rotate-hint .msg {
+            margin-top: 16px;
+            font-size: 18px;
+        }
+        @keyframes wiggle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-20deg); }
+            75% { transform: rotate(20deg); }
+        }
+        @media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+            #rotate-hint { display: flex; }
+            canvas { display: none; }
         }
     </style>
 </head>
 <body>
+    <div id="rotate-hint">
+        <div class="icon">📱↪️</div>
+        <div class="msg">Rotate your device to landscape</div>
+    </div>
     <canvas id="game" width="960" height="540"></canvas>
     <script src="game.js"></script>
 </body>

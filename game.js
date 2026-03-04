@@ -423,6 +423,15 @@ canvas.addEventListener("touchstart", e => {
     e.preventDefault();
     if (state !== "playing") {
         initAudio();
+        // Try fullscreen + landscape lock on mobile
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().then(() => {
+                if (screen.orientation && screen.orientation.lock) {
+                    screen.orientation.lock("landscape").catch(() => {});
+                }
+                setTimeout(resizeCanvas, 200);
+            }).catch(() => {});
+        }
         if (state === "start") startGame();
         else if (state === "gameover" || state === "win") { state = "start"; stopAllDistractionSounds(); stopLeakSound(); }
         return;
@@ -475,6 +484,32 @@ function drawTouchControls() {
         ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (id === "fart" ? 7 : 10));
     }
 }
+
+// ---- Landscape / Resize Support ----
+function resizeCanvas() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const aspect = W / H; // 960/540 = 16:9
+    let drawW, drawH;
+    if (vw / vh > aspect) {
+        drawH = vh;
+        drawW = vh * aspect;
+    } else {
+        drawW = vw;
+        drawH = vw / aspect;
+    }
+    canvas.style.width = Math.floor(drawW) + "px";
+    canvas.style.height = Math.floor(drawH) + "px";
+}
+
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+window.addEventListener("orientationchange", () => {
+    setTimeout(resizeCanvas, 150);
+});
+document.addEventListener("fullscreenchange", () => {
+    setTimeout(resizeCanvas, 150);
+});
 
 // ---- Particle System ----
 function spawnFartCloud(x, y, big) {
@@ -584,7 +619,7 @@ function triggerBlast() {
     playBlastFartSound();
 
     // Disable nearby noise sources - the blast knocks them out
-    const BLAST_DISABLE_RADIUS = FART_RADIUS * 2;
+    const BLAST_DISABLE_RADIUS = FART_RADIUS * 1.5;
     const DISABLE_DURATION = 300; // ~5 seconds at 60fps
     for (let i = 0; i < noiseSources.length; i++) {
         const ns = noiseSources[i];
@@ -600,7 +635,7 @@ function triggerBlast() {
     }
 
     // 2x the normal fart radius for detection
-    checkFartHeard(FART_RADIUS * 2);
+    checkFartHeard(FART_RADIUS * 1.5);
 
     fartman.gas = Math.max(0, fartman.gas - 50);
 }
