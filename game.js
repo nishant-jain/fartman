@@ -371,6 +371,111 @@ window.addEventListener("keydown", e => {
 });
 window.addEventListener("keyup", e => { keys[e.code] = false; });
 
+// ---- Mobile Touch Controls ----
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+// Virtual button regions (in canvas coordinates)
+const BTN_SIZE = 70;
+const BTN_PAD = 20;
+const BTN_Y = H - BTN_SIZE - BTN_PAD;
+const touchBtns = {
+    left:  { x: BTN_PAD, y: BTN_Y, w: BTN_SIZE, h: BTN_SIZE, key: "ArrowLeft", label: "◀", active: false },
+    right: { x: BTN_PAD + BTN_SIZE + 12, y: BTN_Y, w: BTN_SIZE, h: BTN_SIZE, key: "ArrowRight", label: "▶", active: false },
+    fart:  { x: W - BTN_SIZE * 2 - BTN_PAD, y: BTN_Y, w: BTN_SIZE * 2, h: BTN_SIZE, key: "Space", label: "FART", active: false },
+};
+
+function canvasTouchPos(touch) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (touch.clientX - rect.left) * (W / rect.width),
+        y: (touch.clientY - rect.top) * (H / rect.height)
+    };
+}
+
+function hitTestBtn(pos) {
+    for (const id in touchBtns) {
+        const b = touchBtns[id];
+        if (pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) {
+            return id;
+        }
+    }
+    return null;
+}
+
+function updateTouchButtons(touches) {
+    // Reset all
+    for (const id in touchBtns) {
+        touchBtns[id].active = false;
+        keys[touchBtns[id].key] = false;
+    }
+    // Activate touched ones
+    for (let i = 0; i < touches.length; i++) {
+        const pos = canvasTouchPos(touches[i]);
+        const id = hitTestBtn(pos);
+        if (id) {
+            touchBtns[id].active = true;
+            keys[touchBtns[id].key] = true;
+        }
+    }
+}
+
+canvas.addEventListener("touchstart", e => {
+    e.preventDefault();
+    if (state !== "playing") {
+        initAudio();
+        if (state === "start") startGame();
+        else if (state === "gameover" || state === "win") { state = "start"; stopAllDistractionSounds(); stopLeakSound(); }
+        return;
+    }
+    updateTouchButtons(e.touches);
+}, { passive: false });
+
+canvas.addEventListener("touchmove", e => {
+    e.preventDefault();
+    if (state === "playing") updateTouchButtons(e.touches);
+}, { passive: false });
+
+canvas.addEventListener("touchend", e => {
+    e.preventDefault();
+    if (state === "playing") updateTouchButtons(e.touches);
+}, { passive: false });
+
+canvas.addEventListener("touchcancel", e => {
+    e.preventDefault();
+    if (state === "playing") updateTouchButtons(e.touches);
+}, { passive: false });
+
+function drawTouchControls() {
+    if (!isTouchDevice || state !== "playing") return;
+
+    for (const id in touchBtns) {
+        const b = touchBtns[id];
+        // Button background
+        ctx.fillStyle = b.active ? "rgba(255, 255, 255, 0.35)" : "rgba(255, 255, 255, 0.15)";
+        ctx.beginPath();
+        const r = 12;
+        ctx.moveTo(b.x + r, b.y);
+        ctx.arcTo(b.x + b.w, b.y, b.x + b.w, b.y + b.h, r);
+        ctx.arcTo(b.x + b.w, b.y + b.h, b.x, b.y + b.h, r);
+        ctx.arcTo(b.x, b.y + b.h, b.x, b.y, r);
+        ctx.arcTo(b.x, b.y, b.x + b.w, b.y, r);
+        ctx.closePath();
+        ctx.fill();
+
+        // Border
+        ctx.strokeStyle = b.active ? "rgba(255, 255, 255, 0.6)" : "rgba(255, 255, 255, 0.3)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineWidth = 1;
+
+        // Label
+        ctx.fillStyle = b.active ? "rgba(255, 255, 255, 0.9)" : "rgba(255, 255, 255, 0.6)";
+        ctx.font = id === "fart" ? "bold 20px monospace" : "bold 28px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (id === "fart" ? 7 : 10));
+    }
+}
+
 // ---- Particle System ----
 function spawnFartCloud(x, y, big) {
     const count = big ? 30 : 4;
@@ -1175,7 +1280,7 @@ function drawGasBar() {
     // Controls hint
     ctx.fillStyle = "rgba(255,255,255,0.5)";
     ctx.font = "11px monospace";
-    ctx.fillText("HOLD SPACE = Release Gas  |  ← → = Move", bx, by + 44);
+    ctx.fillText(isTouchDevice ? "HOLD FART = Release Gas  |  ◀ ▶ = Move" : "HOLD SPACE = Release Gas  |  ← → = Move", bx, by + 44);
 }
 
 function drawLevelEnd() {
@@ -1272,7 +1377,16 @@ function drawStartScreen() {
     ctx.strokeRect(W / 2 - 220, 220, 440, 160);
 
     ctx.font = "14px monospace";
-    const lines = [
+    const lines = isTouchDevice ? [
+        "Your gas builds up constantly!",
+        "HOLD the FART button to release gas.",
+        "At 100% you'll have a BIG BLAST!",
+        "",
+        "♪ Release near noisy distractions! ♪",
+        "",
+        "If a coworker hears you... GAME OVER!",
+        "Reach the RESTROOM to WIN!",
+    ] : [
         "Your gas builds up constantly!",
         "HOLD SPACE to slowly release gas.",
         "At 100% you'll have a BIG BLAST!",
@@ -1290,12 +1404,12 @@ function drawStartScreen() {
     if (Math.floor(Date.now() / 500) % 2 === 0) {
         ctx.fillStyle = "#4CAF50";
         ctx.font = "bold 22px monospace";
-        ctx.fillText("[ Press ENTER to Start ]", W / 2, 440);
+        ctx.fillText(isTouchDevice ? "[ Tap to Start ]" : "[ Press ENTER to Start ]", W / 2, 440);
     }
 
     ctx.fillStyle = "#888";
     ctx.font = "12px monospace";
-    ctx.fillText("← → Move  |  HOLD SPACE = Release Gas", W / 2, 490);
+    ctx.fillText(isTouchDevice ? "◀ ▶ Move  |  HOLD FART = Release Gas" : "← → Move  |  HOLD SPACE = Release Gas", W / 2, 490);
 }
 
 function drawGameOverScreen() {
@@ -1331,7 +1445,7 @@ function drawGameOverScreen() {
     if (Math.floor(Date.now() / 500) % 2 === 0) {
         ctx.fillStyle = "#ff6666";
         ctx.font = "bold 20px monospace";
-        ctx.fillText("[ Press ENTER to Retry ]", W / 2, 440);
+        ctx.fillText(isTouchDevice ? "[ Tap to Retry ]" : "[ Press ENTER to Retry ]", W / 2, 440);
     }
 }
 
@@ -1393,7 +1507,7 @@ function drawWinScreen() {
     if (Math.floor(Date.now() / 500) % 2 === 0) {
         ctx.fillStyle = "#4CAF50";
         ctx.font = "bold 20px monospace";
-        ctx.fillText("[ Press ENTER for Menu ]", W / 2, 470);
+        ctx.fillText(isTouchDevice ? "[ Tap for Menu ]" : "[ Press ENTER for Menu ]", W / 2, 470);
     }
 }
 
@@ -1415,6 +1529,7 @@ function gameLoop() {
         drawParticles();
         ctx.restore();
         drawGasBar();
+        drawTouchControls();
     } else if (state === "gameover") {
         ctx.save();
         drawBackground();
