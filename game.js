@@ -1208,8 +1208,8 @@ function drawCoworkerLaughing(cw) {
     ctx.fillStyle = "#7f8c8d";
     const pointDir = cw.dir;
     ctx.save();
-    ctx.translate(sx + pointDir * 12 * S, baseY - 35 * S - laughBob);
-    ctx.rotate(pointDir * -25 * Math.PI / 180);
+    ctx.translate(sx + pointDir * 12 * S, baseY - 32 * S - laughBob);
+    ctx.rotate(pointDir * 10 * Math.PI / 180);
     ctx.beginPath();
     ctx.ellipse(pointDir * 10 * S, 0, 12 * S, 4 * S, 0, 0, Math.PI * 2);
     ctx.fill();
