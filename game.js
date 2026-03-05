@@ -458,6 +458,11 @@ let shameTimer = 0; // timer for the caught shame animation
 let caughtByCoworker = null; // which coworker caught fartman
 let flickerLightIndex = 0; // which ceiling light flickers
 let fallenLight = null; // { x, y, vy, fallen, flickerTimer }
+let closeCalls = 0; // number of near-misses (heard but masked)
+let popups = []; // { text, x, y, life, maxLife, color } floating feedback texts
+let gameStartTime = 0; // for scoring
+let lastScore = 0;
+let speedEscalationTimer = 0; // ticks up, speeds coworkers every 30s
 
 // ---- Input ----
 window.addEventListener("keydown", e => {
@@ -713,8 +718,11 @@ function buildLevel() {
             patrolMin: sitting ? x : Math.max(50, Math.floor(x - patrolRange)),
             patrolMax: sitting ? x : Math.min(4950, Math.floor(x + patrolRange)),
             speed: sitting ? 0 : speeds[i],
+            baseSpeed: sitting ? 0 : speeds[i],
             alert: 0,
             sitting,
+            hunting: false,
+            huntTimer: 0,
         };
     });
 
@@ -752,6 +760,10 @@ function startGame() {
     fartCooldown = 0;
     shameTimer = 0;
     caughtByCoworker = null;
+    closeCalls = 0;
+    popups = [];
+    gameStartTime = Date.now();
+    speedEscalationTimer = 0;
     camera.x = 0;
     buildLevel();
 }
@@ -760,10 +772,32 @@ function startGame() {
 // Check if fart sound is masked by a distraction, return true if heard by coworker
 function checkFartHeard(radius) {
     // If fartman is inside any active noise source, his fart is masked
+    let masked = false;
     for (const ns of noiseSources) {
         if (ns.disabled > 0) continue;
-        if (Math.abs(fartman.x - ns.x) < ns.radius) return false;
+        if (Math.abs(fartman.x - ns.x) < ns.radius) { masked = true; break; }
     }
+
+    if (masked) {
+        // Check if a coworker would have heard — close call!
+        let gotPhew = false;
+        for (const cw of coworkers) {
+            if (Math.abs(fartman.x - cw.x) < radius) {
+                cw.alert = 60;
+                if (!cw.sitting) {
+                    cw.hunting = true;
+                    cw.huntTimer = 180; // 3 seconds at 60fps
+                }
+                if (!gotPhew) {
+                    closeCalls++;
+                    spawnPopup("PHEW!", fartman.x - camera.x, fartman.y - 80, "#4CAF50");
+                    gotPhew = true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Not masked — check if any coworker is close enough to hear
     for (const cw of coworkers) {
         if (Math.abs(fartman.x - cw.x) < radius) {
@@ -781,6 +815,10 @@ function checkFartHeard(radius) {
         }
     }
     return false;
+}
+
+function spawnPopup(text, x, y, color) {
+    popups.push({ text, x, y, life: 80, maxLife: 80, color: color || "#fff" });
 }
 
 // Big blast when meter hits 100%
@@ -842,8 +880,13 @@ function update() {
         // Start leak hiss sound
         startLeakSound();
 
-        // Fart radius for detection while leaking
-        checkFartHeard(FART_RADIUS * 1);
+        // Gas stages: silent below 40%, normal 40-70%, loud 70%+
+        if (fartman.gas >= 70) {
+            checkFartHeard(FART_RADIUS * 1.2);
+        } else if (fartman.gas >= 40) {
+            checkFartHeard(FART_RADIUS * 1);
+        }
+        // below 40%: silent — no detection
     } else {
         stopLeakSound();
         leakParticleTimer = 0;
@@ -880,14 +923,67 @@ function update() {
     // Blast timer
     if (blastTimer > 0) blastTimer--;
 
+    // Popup update
+    for (let i = popups.length - 1; i >= 0; i--) {
+        popups[i].life--;
+        popups[i].y -= 0.7;
+        if (popups[i].life <= 0) popups.splice(i, 1);
+    }
+
     // Coworker patrol
     for (const cw of coworkers) {
         if (!cw.sitting) {
-            cw.x += cw.speed * cw.dir;
-            if (cw.x <= cw.patrolMin) cw.dir = 1;
-            if (cw.x >= cw.patrolMax) cw.dir = -1;
+            if (cw.hunting && cw.huntTimer > 0) {
+                // Chase toward fartman at 1.5x speed
+                cw.dir = fartman.x > cw.x ? 1 : -1;
+                cw.x += cw.speed * 1.5 * cw.dir;
+                cw.huntTimer--;
+                if (cw.huntTimer <= 0) {
+                    cw.hunting = false;
+                    // Face direction back into patrol zone
+                    cw.dir = cw.x < (cw.patrolMin + cw.patrolMax) / 2 ? 1 : -1;
+                }
+            } else {
+                cw.x += cw.speed * cw.dir;
+                if (cw.x <= cw.patrolMin) cw.dir = 1;
+                if (cw.x >= cw.patrolMax) cw.dir = -1;
+            }
         }
         if (cw.alert > 0) cw.alert--;
+    }
+
+    // Speed escalation: every 30 seconds coworkers get 10% faster (cap 2x)
+    speedEscalationTimer++;
+    if (speedEscalationTimer >= 60 * 30) {
+        speedEscalationTimer = 0;
+        for (const cw of coworkers) {
+            if (!cw.sitting) {
+                cw.speed = Math.min(cw.baseSpeed * 2, cw.speed * 1.1);
+            }
+        }
+        spawnPopup("Office getting busy...", W / 2, H / 2 - 60, "#FF9800");
+    }
+
+    // Hunting coworker catches fartman if close enough and not masked
+    for (const cw of coworkers) {
+        if (cw.hunting && Math.abs(fartman.x - cw.x) < 50) {
+            let masked = false;
+            for (const ns of noiseSources) {
+                if (ns.disabled > 0) continue;
+                if (Math.abs(fartman.x - ns.x) < ns.radius) { masked = true; break; }
+            }
+            if (!masked) {
+                caughtByCoworker = cw;
+                state = "caught";
+                shameTimer = 150;
+                stopLeakSound();
+                stopAllDistractionSounds();
+                for (const c of coworkers) {
+                    c.laughing = true;
+                    c.dir = c.x < fartman.x ? 1 : -1;
+                }
+            }
+        }
     }
 
     // Noise source animation & disabled countdown
@@ -970,7 +1066,24 @@ function update() {
         stopAllDistractionSounds();
         stopLeakSound();
         playWinSound();
+        lastScore = calcScore();
+        const pb = parseInt(localStorage.getItem("fartman_best") || "0");
+        if (lastScore > pb) localStorage.setItem("fartman_best", lastScore);
     }
+}
+
+function calcScore() {
+    const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+    const score = Math.max(0, 10000 - elapsed * 20 + closeCalls * 200);
+    return score;
+}
+
+function getGrade(score) {
+    if (score >= 8000) return { grade: "S", color: "#FFD700" };
+    if (score >= 6000) return { grade: "A", color: "#4CAF50" };
+    if (score >= 4000) return { grade: "B", color: "#2196F3" };
+    if (score >= 2000) return { grade: "C", color: "#FF9800" };
+    return { grade: "D", color: "#f44336" };
 }
 
 // ---- Caught / Shame Animation ----
@@ -2046,14 +2159,30 @@ function drawGasBar() {
     ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
     ctx.fillRect(bx - 3, by - 3, barW + 6, barH + 6);
 
-    // Bar fill
+    // Bar fill — color stages: green (silent <40%), yellow (normal 40-70%), red (loud 70%+)
     const ratio = fartman.gas / 100;
-    const r = Math.floor(ratio * 255);
-    const g = Math.floor((1 - ratio) * 200);
-    ctx.fillStyle = `rgb(${r}, ${g}, 50)`;
+    let barColor;
+    if (fartman.gas < 40) {
+        barColor = "#4CAF50"; // green = silent zone
+    } else if (fartman.gas < 70) {
+        barColor = "#FFC107"; // yellow = normal detection
+    } else {
+        barColor = "#f44336"; // red = loud, 1.2x radius
+    }
+    ctx.fillStyle = barColor;
     ctx.fillRect(bx, by, barW * ratio, barH);
 
-    // Pulsing glow when high
+    // Stage zone markers
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx + barW * 0.4, by);
+    ctx.lineTo(bx + barW * 0.4, by + barH);
+    ctx.moveTo(bx + barW * 0.7, by);
+    ctx.lineTo(bx + barW * 0.7, by + barH);
+    ctx.stroke();
+
+    // Pulsing glow when loud
     if (ratio > 0.7) {
         const glowAlpha = Math.sin(Date.now() * 0.01) * 0.15 + 0.15;
         ctx.fillStyle = `rgba(255, 0, 0, ${glowAlpha})`;
@@ -2070,7 +2199,8 @@ function drawGasBar() {
     ctx.fillStyle = "#fff";
     ctx.font = "bold 15px monospace";
     ctx.textAlign = "left";
-    ctx.fillText(`GAS: ${Math.floor(fartman.gas)}%`, bx + 8, by + 20);
+    const stageLabel = fartman.gas < 40 ? "SILENT" : fartman.gas < 70 ? "NORMAL" : "LOUD";
+    ctx.fillText(`GAS: ${Math.floor(fartman.gas)}% [${stageLabel}]`, bx + 8, by + 20);
 
     // Warning flash
     if (fartman.gas > 80) {
@@ -2130,6 +2260,18 @@ function drawParticles() {
         ctx.beginPath();
         ctx.arc(p.x - camera.x, p.y, p.size * (1 - alpha * 0.3), 0, Math.PI * 2);
         ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+}
+
+function drawPopups() {
+    ctx.textAlign = "center";
+    for (const p of popups) {
+        const alpha = p.life / p.maxLife;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.font = "bold 22px monospace";
+        ctx.fillText(p.text, p.x, p.y);
     }
     ctx.globalAlpha = 1;
 }
@@ -2304,14 +2446,37 @@ function drawWinScreen() {
         ctx.fill();
     }
 
+    // Score + grade
+    const { grade, color: gradeColor } = getGrade(lastScore);
+    const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+    const pb = parseInt(localStorage.getItem("fartman_best") || "0");
+    const isNewBest = lastScore >= pb;
+
+    ctx.font = "bold 48px monospace";
+    ctx.fillStyle = gradeColor;
+    ctx.fillText(grade, W / 2 - 120, 420);
+
+    ctx.font = "bold 22px monospace";
     ctx.fillStyle = "#fff";
-    ctx.font = "16px monospace";
-    ctx.fillText("Sweet, sweet relief!", W / 2, 420);
+    ctx.fillText(`SCORE: ${lastScore}`, W / 2 + 20, 400);
+    ctx.font = "14px monospace";
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText(`Time: ${elapsed}s  |  Close calls: ${closeCalls}`, W / 2 + 20, 425);
+
+    if (isNewBest) {
+        ctx.fillStyle = "#FFD700";
+        ctx.font = "bold 16px monospace";
+        ctx.fillText("NEW PERSONAL BEST!", W / 2 + 20, 448);
+    } else {
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.font = "14px monospace";
+        ctx.fillText(`Best: ${pb}`, W / 2 + 20, 448);
+    }
 
     if (Math.floor(Date.now() / 500) % 2 === 0) {
         ctx.fillStyle = "#4CAF50";
         ctx.font = "bold 20px monospace";
-        ctx.fillText(isTouchDevice ? "[ Tap for Menu ]" : "[ Press ENTER for Menu ]", W / 2, 470);
+        ctx.fillText(isTouchDevice ? "[ Tap for Menu ]" : "[ Press ENTER for Menu ]", W / 2, 490);
     }
 }
 
@@ -2332,6 +2497,7 @@ function gameLoop() {
         drawFartman();
         drawParticles();
         ctx.restore();
+        drawPopups();
         drawGasBar();
         drawTouchControls();
     } else if (state === "caught") {
